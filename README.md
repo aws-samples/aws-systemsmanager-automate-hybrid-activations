@@ -6,7 +6,7 @@ To set up servers and virtual machines (VMs) in your hybrid environment as manag
 
 Every Activation you create has an _activation expiration_ and _registration limit value._ An _activation expiration_ is a window of time when you can register on-premises machines with Systems Manager. The Max value you can specify for this parameter is 30 days. A _registration limit_ specifies the  the maximum number of managed nodes you can register. When either of the value is reached, you can no longer use the same managed-instance activation and would need that you manually create a new managed-instance activation in order to continue registering new servers in your hybrid environment.
 
-In this blog post, I will walkthrough the solution on automating the System Manager Hybrid Activations creation. This removes the manual intervention of managing these credentials which includes recreating the credentials when registration count is over or the Expiration date has passed.
+In this Project, I will walkthrough the solution on automating the System Manager Hybrid Activations creation. This removes the manual intervention of managing these credentials which includes recreating the credentials when registration count is over or the Expiration date has passed.
 
 
 
