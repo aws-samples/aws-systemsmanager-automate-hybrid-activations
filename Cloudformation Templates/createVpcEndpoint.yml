@@ -1,0 +1,67 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: The AWS CloudFormation template to Deploy Resources for the Blog on Automating Hybrid Activations. **WARNING** This template creates a VPC endpoint and its related resources. You will be billed for the AWS resources used if you create a stack from this template.
+Parameters:
+  VpcIdForApiGateway:
+    Type: AWS::EC2::VPC::Id
+    Description: The VPC ID for API gateway.
+  SubnetsForVpcEndpoint:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: The subnets in which vpc endpoint for API gateway will be created. Subnets should belong to the vpc mentioned in VpcIdForApiGateway parameter.
+  AllowedIPRange:
+    Type: String
+    Description: Enter Allowed CIDR range for TCP 443 Inbound on VPC endpoint interfaces. This is the network range from which requests are coming. Use the format as 1.2.3.4/5.
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$
+Resources:
+  PrivateApiEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref 'AWS::Region'
+          - .execute-api
+      VpcId: !Ref VpcIdForApiGateway
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !GetAtt
+          - PrivateApiEndpointSecurityGroup
+          - GroupId
+      SubnetIds: !Ref SubnetsForVpcEndpoint
+      VpcEndpointType: Interface
+  PrivateApiEndpointSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for PrivateApiEndpoint
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/32
+          Description: Allow all outbound traffic by default
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 1
+      SecurityGroupIngress:
+        - CidrIp: !Ref AllowedIPRange
+          Description: Allowing inbound access from AllowedIPRange
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      VpcId: !Ref VpcIdForApiGateway
+Outputs:
+  VpcEndpoint:
+    Value: !Ref PrivateApiEndpoint
+    Description: VPC Endpoint created using cloudformation for the blog on automating ssm hybrid activations.

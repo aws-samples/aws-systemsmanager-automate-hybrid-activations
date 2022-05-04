@@ -1,0 +1,526 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: The AWS CloudFormation template to Deploy Resources for the Blog on Automating Hybrid Activations. **WARNING** This template creates an Amazon API gateway, DynamoDB Table, SSM Paramter, Cloudwatch Log group, AWS Lambda function and its related resources. You will be billed for the AWS resources used if you create a stack from this template.
+Parameters:
+  ApiGatewayStageName:
+    Description: (Optional)Enter name for the API's Stage.
+    Type: String
+    AllowedPattern: "[a-z0-9]+"
+    Default: lambdastage
+  KmsKeyId:
+    Description: Enter KMS key ID to encrypt the Paramater Store.
+    Type: String
+  CloudwatchLogRoleArn:
+    Type: String
+    Description: (Optional) Enter the Cloudwatch Log Role ARN if it is already configured for the Amazon API gateway. Alternatively, leave it blank for the Cloudformation stack to create and configure Cloudwatch Log Role ARN for the Amazon API Gateway.
+    AllowedPattern: ^(arn:aws:iam::\d{12}:role(\/|\/[\w\!\"\#\$\%\'\(\)\*\+\,\-\.\/\:\;\<\=\>\?\@\[\\\]\^\`\{\|\}\~]{1,510}\/)[\w\+\=\,\.\@\-]{1,64})$|^$
+    Default: ''
+  VpcEndpointForApiGateway:
+    Type: String
+    Description: Enter the VPC endpoint ID for API gateway.
+    AllowedPattern: ^vpce-[a-zA-Z0-9]+$
+Conditions:
+  CreateLogGroup:
+    !Equals [!Ref CloudwatchLogRoleArn,'']
+Resources:
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      Description: Role for Lambda function to manage activations credentials. Created using Cloudformation for Blog on Automating SSM Hybrid Activations.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+  LambdaMangedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Managed Policy for Lambda function IAM role.
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'ssm:CreateActivation'
+              - 'ssm:DescribeActivations'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'dynamodb:GetItem'
+              - 'dynamodb:PutItem'
+              - 'dynamodb:UpdateItem'
+            Resource:
+              - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ssm-hybridactivations-table"
+          - Effect: Allow
+            Action:
+              - 'ssm:PutParameter'
+              - 'ssm:GetParameter'
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/hybridactivationsformanagedinstances/*"
+          - Effect: Allow
+            Action:
+              - 'iam:PassRole'
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${SSMRoleForHybridInstances}"
+          - Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:Encrypt'
+            Resource:
+              - !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${KmsKeyId}"
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LambdaLogGroup}"
+              - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LambdaLogGroup}:log-stream:*"
+      Roles:
+        - !Ref LambdaFunctionRole
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: AutomatingSSMHybridCredentials
+      Description: Lambda Function for Blog on Automating SSM Hybrid Activations
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Environment:
+        Variables:
+          KMSKey: !Ref KmsKeyId
+          SSMRole: !Ref SSMRoleForHybridInstances
+      Code:
+        ZipFile: !Sub |
+            import json
+            import time
+            import datetime
+            import os
+            import boto3
+            from botocore.exceptions import ClientError
+            
+            kmskeyId = os.getenv('KMSKey')
+            iamroleforssm = os.getenv('SSMRole')
+                    
+            def lambda_handler(event, context):
+            
+                #### Helper functions ####
+                #This block handles creating activations and updating parameter store.                
+                def create_activations():
+                  print('Creating new Activations..')
+                  expiry_time = start_date = datetime.datetime.now() + datetime.timedelta(30)
+                  ssm = boto3.client('ssm')
+                  #ssmrole = os.getenv('iamrole')
+                  try:
+                     response = ssm.create_activation(
+                         Description='Created by Lambda Function for Blog on Automating Hybrid Activations.',
+                         IamRole=iamroleforssm,
+                         RegistrationLimit=10,
+                         ExpirationDate=expiry_time
+                      )
+                     return response['ActivationId'],response['ActivationCode']
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)                
+                
+                def update_parameterstore(value,key):
+                  print('Updating Parameter store.')
+                
+                  ssm = boto3.client('ssm')
+                  try:
+                     put_response = ssm.put_parameter(
+                         Name='/hybridactivationsformanagedinstances/hybridactivationid',
+                         Value=value,
+                         KeyId=key,
+                         Type='SecureString',
+                         Overwrite=True
+                       )
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)  
+                
+                def put_items_if_doesnt_exist(runtime_region):
+                  print('Checking if the dynamodb table contains the necessary item, the state.')
+                  dynamodb = boto3.resource('dynamodb',region_name=runtime_region)
+                  try:
+                      table = dynamodb.Table('ssm-hybridactivations-table')
+                      response = table.put_item(
+                      Item={
+                              'name':'ExecutionStatus',
+                              'state': 'Unlocked',
+                          },
+                      ConditionExpression='attribute_not_exists(#A)',ExpressionAttributeNames={"#A": "state"}
+                      )
+                      return "Item is not present in the Table.. Writing the item."
+                  except ClientError as e:
+                      # Ignore the ConditionalCheckFailedException
+                      if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                          raise
+                
+                def get_state(runtime_region):
+                  dynamodb = boto3.resource('dynamodb',region_name=runtime_region)
+                  try:
+                      table = dynamodb.Table('ssm-hybridactivations-table')    
+                      response = table.get_item(Key={'name':'ExecutionStatus'})
+                      status = response['Item']['state']
+                      print('Current State is: ' + status)
+                      return status
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)
+                
+                def get_credentials(kmskeyId):
+                  print('Getting credentials from the Parameter store..')
+                  ssm = boto3.client('ssm')
+                  try:
+                      get_response = ssm.get_parameter(Name='/hybridactivationsformanagedinstances/hybridactivationid',WithDecryption=True)
+                      try:
+                        get_response_value = get_response['Parameter']['Value']
+                        #For the first run, the parameter store value will be as blank.
+                        if  get_response_value == 'blank':
+                           print('Initially, the parameter store value is set as blank by Cloudformation. Generating new credentials and updating the parameter store.')
+                           new_ActivationID,new_ActivationCode = create_activations()           
+                           newvalue = "{\n    \"ActivationId\": \"" +  new_ActivationID + "\",\n    \"ActivationCode\": \"" + new_ActivationCode + "\"\n}\n"
+                           update_parameterstore(newvalue,kmskeyId)
+                           return new_ActivationID,new_ActivationCode
+                        else:        
+                          value = json.loads(get_response_value)
+                          return value['ActivationId'],value['ActivationCode']
+                      except ValueError as err:
+                        print(err)  
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e) 
+                
+                  
+                def get_registrationlimits(acti_id):
+                  print('Checking the registration limit of the Activations')
+                  ssm = boto3.client('ssm')
+                  try:
+                      describe_response = ssm.describe_activations(Filters=[{'FilterKey':'ActivationIds','FilterValues':[acti_id]}])
+                      if not describe_response['ActivationList']:
+                         # Returning limit,count,expiry as 0 as ActivationList is empty.
+                         limit = '0'
+                         count = '0'
+                         expiry = '0'
+                      else:
+                          for results in describe_response['ActivationList']:
+                              limit = results['RegistrationLimit']
+                              count = results['RegistrationsCount']
+                              expiry = results['ExpirationDate']
+                      return limit,count,expiry
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)
+                
+                
+                #Comparing the times
+                def check_expiry(acti_expiry):
+                  print('Checking expiring..')
+                  current_time = datetime.datetime.now(datetime.timezone.utc)
+                  if acti_expiry > current_time:
+                    return True
+                  else:
+                    return False
+                
+                def check_registrationcount(allowed,used):
+                  print('Checking registrations count..')
+                  current_count = int(allowed) - int(used)
+                  if current_count > 0:
+                    return True
+                  else:
+                    return False
+                
+                def state_to_unlocked(runtime_region):
+                  print('State is Locked.. Changing to Unlocked.')
+                  try:
+                     dynamodb = boto3.resource('dynamodb',region_name=runtime_region)
+                     table = dynamodb.Table('ssm-hybridactivations-table')
+                     response = table.update_item(Key={'name':'ExecutionStatus'}, UpdateExpression='SET #n = :val1',ExpressionAttributeValues={':val1': 'Unlocked'},ExpressionAttributeNames={'#n':'state'})
+                     print('State is Unlocked now.')
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)   
+                
+                def state_to_locked(runtime_region):
+                  print('State is currently Unlocked.. Changing to Locked.')
+                  try:
+                     dynamodb = boto3.resource('dynamodb',region_name=runtime_region)
+                     table = dynamodb.Table('ssm-hybridactivations-table')
+                     response = table.update_item(Key={'name':'ExecutionStatus'}, UpdateExpression='SET #n = :val1',ExpressionAttributeValues={':val1': 'Locked'},ExpressionAttributeNames={'#n':'state'})  
+                     print('State is Locked now.')
+                  except ClientError as e:
+                        raise Exception ("[ERROR]",e)
+                
+                ##### Main Function #####
+            
+                current_region = os.environ['AWS_REGION']
+                put_items_if_doesnt_exist(current_region)
+                for i in range(0,5):
+                  state = get_state(current_region)
+                  if state == 'Unlocked':
+                     state_to_locked(current_region)
+                     break
+                  elif state == 'Locked':
+                     print('State is currently locked.. Retrying after 3 seconds..')
+                     time.sleep(3)
+                     continue
+                
+                print('Getting the Current Activation ID from the Parameter store')
+                id,code = get_credentials(kmskeyId)
+                
+                print('Getting the Expiry date, registrationCount, Registration Limit of the Activation')    
+                activationlimit,activatedcount,activationexpiry = get_registrationlimits(id)
+                
+                if activationlimit == '0':
+                  print("ActivationID/Code details is present in Parameter store but the activation does not exist. Creating new credentials and updating parameter store with new credentials.")
+                  new_ActivationID,new_ActivationCode = create_activations()
+                  newvalue = "{\n    \"ActivationId\": \"" +  new_ActivationID + "\",\n    \"ActivationCode\": \"" + new_ActivationCode + "\"\n}\n"
+                  update_parameterstore(newvalue,kmskeyId)
+                  state_to_unlocked(current_region)
+                  return {
+                   'statusCode': 200,
+                   'headers': {
+                       'Content-Type': 'application/json',
+                       'Access-Control-Allow-Origin': '*'
+                   },
+                   'body': json.dumps({"ActivationId": new_ActivationID,"ActivationCode": new_ActivationCode}),
+                   "isBase64Encoded": False
+                    }      
+                else:      
+                  result = check_expiry(activationexpiry)
+                  if result == True:
+                    count = check_registrationcount(activationlimit,activatedcount)
+                    if count == True:
+                        print('Credentials are available')
+                        state_to_unlocked(current_region)
+                        return {
+                         'statusCode': 200,
+                         'headers': {
+                             'Content-Type': 'application/json',
+                             'Access-Control-Allow-Origin': '*'
+                         },
+                         'body': json.dumps({"ActivationId": id,"ActivationCode": code}),
+                         "isBase64Encoded": False
+                          }      
+                    elif count == False:
+                        print('Credentials are totally used..Generating new one and updating the parameter store.')
+                        new_ActivationID,new_ActivationCode = create_activations()
+                        newvalue = "{\n    \"ActivationId\": \"" +  new_ActivationID + "\",\n    \"ActivationCode\": \"" + new_ActivationCode + "\"\n}\n"
+                        update_parameterstore(newvalue,kmskeyId)
+                        state_to_unlocked(current_region)
+                        return {
+                         'statusCode': 200,
+                         'headers': {
+                             'Content-Type': 'application/json',
+                             'Access-Control-Allow-Origin': '*'
+                         },
+                         'body': json.dumps({"ActivationId": new_ActivationID,"ActivationCode": new_ActivationCode}),
+                         "isBase64Encoded": False
+                          }
+                    else:
+                      print('Error:Cant determine count. Exiting..')
+                      errormessage = 'Error:Cant determine count. Exiting..'
+                      return {"error": errormessage}
+                      
+                  elif result == False:
+                      print('Credentials are Expired.. Generating new one and updating the parameter store.')
+                      new_ActivationID,new_ActivationCode = create_activations()
+                      newvalue = "{\n    \"ActivationId\": \"" +  new_ActivationID + "\",\n    \"ActivationCode\": \"" + new_ActivationCode + "\"\n}\n"
+                      update_parameterstore(newvalue,kmskeyId)
+                      state_to_unlocked(current_region)
+                      print('Lambda Execution Completed.')
+                      return {
+                       'statusCode': 200,
+                       'headers': {
+                           'Content-Type': 'application/json',
+                           'Access-Control-Allow-Origin': '*'
+                       },
+                       'body': json.dumps({"ActivationId": new_ActivationID,"ActivationCode": new_ActivationCode}),
+                       "isBase64Encoded": False
+                        }          
+                      #return new_ActivationID,new_ActivationCode
+                  else:
+                    print('Error:Cant determine Expiry. Exiting..')
+                    errormessage = 'Error: Cant determine Expiry. Exiting..'
+                    return {"error": errormessage}           
+      Runtime: python3.8
+      Timeout: 45
+            #
+  LambdaLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${LambdaFunction}"
+      RetentionInDays: 30
+  APIGatewayLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${ApiGateway}"
+      RetentionInDays: 30
+  SSMHybridStatusTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ssm-hybridactivations-table
+      BillingMode: PROVISIONED
+      AttributeDefinitions:
+        -
+          AttributeName: name
+          AttributeType: S
+      KeySchema:
+        -
+          AttributeName: name
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  SSMRoleForHybridInstances:
+    DependsOn:
+      - ApiGatewayAccountConfig
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "ssm.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Description: IAM role for SSM Hybrid Activation.Created using Cloudformation for blog on Automating SSM Hybrid Activations.
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: API gateway created using Cloudformation for the blog on Automating SSM Hybrid Activations.
+      EndpointConfiguration:
+        Types:
+          - PRIVATE
+      Name: ssm-hybridactivation-restapi
+      Policy:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource:
+              Fn::Join:
+              - ""
+              - - 'execute-api:'
+                - '/*'
+          - Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource:
+              Fn::Join:
+              - ""
+              - - 'execute-api:'
+                - '/*'
+            Condition:
+              StringNotEquals:
+                "aws:SourceVpce":
+                  Ref: VpcEndpointForApiGateway
+  ApiGatewayRootMethod:
+    DependsOn:
+      - ApiGatewayAccountConfig
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+          - lambdaArn: !GetAtt LambdaFunction.Arn
+      ResourceId: !GetAtt ApiGateway.RootResourceId
+      RestApiId: !Ref ApiGateway
+  LambdaApiGatewayInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/
+  ApiGatewayAccountConfig:
+    Type: "AWS::ApiGateway::Account"
+    Properties:
+      CloudWatchRoleArn: !If [CreateLogGroup, !GetAtt ApiGatewayLoggingRole.Arn, !Ref CloudwatchLogRoleArn]
+  ApiGatewayLoggingRole:
+    Type: "AWS::IAM::Role"
+    Condition: CreateLogGroup
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "apigateway.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: "/"
+      RoleName: ApiGatewayRoleForCloudwatchLogging
+      Description: CloudWatch Logs role ARN for API gateway to be set at account settings.
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayRootMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref ApiGatewayStageName
+      StageDescription:
+        Description: Stage
+        LoggingLevel: ERROR
+        MetricsEnabled: True
+        AccessLogSetting:
+          DestinationArn: !GetAtt APIGatewayLogGroup.Arn
+          Format: >-
+            {"requestId":"$context.requestId", "ip": "$context.identity.sourceIp",
+            "caller":"$context.identity.caller",
+            "requestTime":"$context.requestTime",
+            "status":"$context.status","IntegrationError":"$context.integration.error"}
+  ApiUsagePlan:
+    DependsOn:
+      - ApiGatewayDeployment
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: !Ref ApiGatewayStageName
+      Description: Usage Plan for ssm-hybridactivation-restapi API
+      Quota:
+        Limit: 1000
+        Period: DAY
+      Throttle:
+        BurstLimit: 50
+        RateLimit: 50
+      UsagePlanName: ssm-hybridactivation-API-usageplan
+  SSMCredentials:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /hybridactivationsformanagedinstances/hybridactivationid
+      Type: String
+      Value: blank
+      Description: This parameter stores the hybrid credentials for the blog on automating ssm hybrid activations.
+Outputs:
+  ApiGatewayInvokeURL:
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGatewayStageName}
+    Description: API gateway URL to fetch Activations ID/Code.
