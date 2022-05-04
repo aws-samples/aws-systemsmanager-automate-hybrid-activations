@@ -57,7 +57,7 @@ For this walkthrough, you should have the following:
 -   The VPC you are deploying to must have both [enableDnsSupport and enableDnsHostnames VPC](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html#vpc-dns-updating) attributes set to **true**.
 -   Basic familiarity with AWS CloudFormation, AWS Systems Manager, and Amazon API Gateway.
 
-**Step1: Create VPC endpoint for API Gateway**
+## Create VPC endpoint for API Gateway**
 
 In the first step, you create VPC endpoints for the API Gateway in your VPC. You also create a security group attached to the endpoint to allow a TCP port 443. Use the below steps to automate this using Cloudformation.
 
@@ -80,7 +80,7 @@ In the first step, you create VPC endpoints for the API Gateway in your VPC. You
 10.  Once the stack has been created, refer the Outputs section of your stack and copy the VPC endpoint ID.
 
 
-**Step2: Create a KMS Key.**
+## Step2: Create a KMS Key.
 
 In this step, you will create a KMS key to encrypt Parameter Store. Here, Parameter store is used to store the Activation Code and Activation ID. To create a KMS key,
 
@@ -94,7 +94,7 @@ In this step, you will create a KMS key to encrypt Parameter Store. Here, Parame
 
 5. Once created, take note of the key ID.
 
-**Step3: Create API Gateway and Lambda.**
+## Create API Gateway and Lambda.**
 
 In the final step, you will create and deploy a Private API & Lambda function. Use the below steps to automate this using Cloudformation.
 
