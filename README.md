@@ -23,7 +23,7 @@ The solution is enabled using AWS CloudFormation stack. The Cloudformation stack
 
 -  **AWS Systems Manager Parameter Store**: To store the Hybrid Activations ID/Code.
 
-![](images/architecture.jpg)
+![](Images/architecture.jpg)
 
 **Following is a brief flow of the executions:**
 
